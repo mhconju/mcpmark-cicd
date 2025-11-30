@@ -3,6 +3,11 @@ on:
   issues:
     types: [opened, labeled]
 
+# Required permissions for GitHub Actions to manage issues and labels
+permissions:
+  issues: write
+  contents: read
+
 jobs:
   issue-triage:
     name: Issue Triage
@@ -12,13 +17,52 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup GitHub Script
+      - name: Setup environment variables
         id: setup
         run: |
           echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
           echo "ISSUE_TITLE=${{ github.event.issue.title }}" >> $GITHUB_ENV
           echo "ISSUE_BODY=${{ github.event.issue.body || '' }}" >> $GITHUB_ENV
           echo "AUTHOR=${{ github.event.issue.user.login }}" >> $GITHUB_ENV
+
+      - name: Create labels if missing
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const labels = [
+              { name: 'bug', color: 'd73a4a', description: 'Something isn\'t working' },
+              { name: 'enhancement', color: 'a2eeef', description: 'New feature or request' },
+              { name: 'epic', color: '7F37D6', description: 'Large feature requiring multiple sub-tasks' },
+              { name: 'maintenance', color: '0075ca', description: 'Maintenance and housekeeping tasks' },
+              { name: 'priority-critical', color: 'b60205', description: 'Critical priority issue' },
+              { name: 'priority-high', color: 'd93f0b', description: 'High priority issue' },
+              { name: 'priority-medium', color: 'fbca04', description: 'Medium priority issue' },
+              { name: 'priority-low', color: '0e8a16', description: 'Low priority issue' },
+              { name: 'needs-triage', color: 'fef2c0', description: 'Needs to be reviewed by maintainers' },
+              { name: 'needs-review', color: '1d76db', description: 'Awaiting review from maintainers' },
+              { name: 'first-time-contributor', color: '5319e7', description: 'Issue created by first-time contributor' }
+            ];
+            
+            for (const label of labels) {
+              try {
+                await github.rest.issues.getLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name
+                });
+                console.log(`Label ${label.name} already exists`);
+              } catch (error) {
+                // Label doesn't exist, create it
+                await github.rest.issues.createLabel({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  name: label.name,
+                  color: label.color,
+                  description: label.description
+                });
+                console.log(`Created label: ${label.name}`);
+              }
+            }
 
       - name: Add needs-triage label
         uses: actions/github-script@v7
@@ -109,45 +153,6 @@ jobs:
             
             return priority;
 
-      - name: Create labels if missing
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const labels = [
-              { name: 'bug', color: 'd73a4a', description: 'Something isn\'t working' },
-              { name: 'enhancement', color: 'a2eeef', description: 'New feature or request' },
-              { name: 'epic', color: '7F37D6', description: 'Large feature requiring multiple sub-tasks' },
-              { name: 'maintenance', color: '0075ca', description: 'Maintenance and housekeeping tasks' },
-              { name: 'priority-critical', color: 'b60205', description: 'Critical priority issue' },
-              { name: 'priority-high', color: 'd93f0b', description: 'High priority issue' },
-              { name: 'priority-medium', color: 'fbca04', description: 'Medium priority issue' },
-              { name: 'priority-low', color: '0e8a16', description: 'Low priority issue' },
-              { name: 'needs-triage', color: 'fef2c0', description: 'Needs to be reviewed by maintainers' },
-              { name: 'needs-review', color: '1d76db', description: 'Awaiting review from maintainers' },
-              { name: 'first-time-contributor', color: '5319e7', description: 'Issue created by first-time contributor' }
-            ];
-            
-            for (const label of labels) {
-              try {
-                await github.rest.issues.getLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label.name
-                });
-                console.log(`Label ${label.name} already exists`);
-              } catch (error) {
-                // Label doesn't exist, create it
-                await github.rest.issues.createLabel({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  name: label.name,
-                  color: label.color,
-                  description: label.description
-                });
-                console.log(`Created label: ${label.name}`);
-              }
-            }
-
   task-breakdown:
     name: Task Breakdown for Epics
     runs-on: ubuntu-latest
@@ -195,9 +200,6 @@ jobs:
               
               subIssueNumbers.push(subIssue.number);
               console.log(`Created sub-issue #${subIssue.number}: ${subIssueTitle}`);
-              
-              // Link sub-issue to parent using GitHub's API (requires PAT with repo scope)
-              // We'll add a comment to the sub-issue instead of using the API
             }
             
             // Create checklist in parent issue
@@ -234,54 +236,52 @@ jobs:
         run: |
           echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
           echo "AUTHOR=${{ github.event.issue.user.login }}" >> $GITHUB_ENV
-          echo "LABELS=${{ join(github.event.issue.labels.*.name, ',') }}" >> $GITHUB_ENV
+          echo "ISSUE_LABELS=${{ join(github.event.issue.labels.*.name, ',') }}" >> $GITHUB_ENV
 
-      - name: Check if first-time contributor in this repo
-        uses: actions/github-script@v7
-        id: first-time-check
-        with:
-          script: |
-            const author = process.env.AUTHOR;
-            
-            // Search for previous issues by this author in this repo
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              creator: author,
-              state: 'all',
-              per_page: 2
-            });
-            
-            // If there's only 1 issue (the current one), it's their first
-            const isFirstTimeContributor = issues.length <= 1;
-            
-            if (isFirstTimeContributor) {
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: context.issue.number,
-                labels: ['first-time-contributor']
-              });
-              console.log('Added first-time-contributor label');
-            }
-            
-            return isFirstTimeContributor;
-
-      - name: Post appropriate response based on issue type
+      - name: Post response and handle first-time contributor
         uses: actions/github-script@v7
         id: post-response
         with:
           script: |
             const issueNumber = context.issue.number;
-            const labels = process.env.LABELS.split(',').filter(l => l);
+            const author = process.env.AUTHOR;
+            const currentLabels = process.env.ISSUE_LABELS.split(',').filter(l => l);
             
+            // Check if first-time contributor in this repo
+            let isFirstTimeContributor = false;
+            try {
+              const { data: issues } = await github.rest.issues.listForRepo({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                creator: author,
+                state: 'all',
+                per_page: 2
+              });
+              
+              // If there's only 1 issue (the current one), it's their first
+              isFirstTimeContributor = issues.length <= 1;
+              
+              if (isFirstTimeContributor) {
+                await github.rest.issues.addLabels({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber,
+                  labels: ['first-time-contributor']
+                });
+                console.log('Added first-time-contributor label');
+              }
+            } catch (error) {
+              console.log('Error checking first-time contributor:', error.message);
+            }
+            
+            // Determine response based on labels
             let response = '';
             
-            if (labels.includes('bug')) {
+            if (currentLabels.includes('bug')) {
               response = `## Bug Report Guidelines\n\nThank you for reporting this bug! Our team will review it shortly.\n\n**Please ensure you've provided:**\n1. Steps to reproduce the issue\n2. Expected vs actual behavior\n3. Environment details\n4. Any relevant screenshots or logs\n\nWe'll update this issue once we start investigating.`;
-            } else if (labels.includes('epic')) {
+            } else if (currentLabels.includes('epic')) {
               response = `## Feature Request Process\n\nThank you for submitting this epic! We've broken it down into 4 sub-tasks for better tracking.\n\n**Process:**\n1. Each sub-task will be assigned to a developer\n2. Progress will be tracked in the parent issue\n3. We'll provide regular updates on implementation status\n4. Please review the created sub-tasks and provide additional details if needed.`;
-            } else if (labels.includes('maintenance')) {
+            } else if (currentLabels.includes('maintenance')) {
               response = `## Maintenance Guidelines\n\nThank you for identifying maintenance needs! Our team will assess the priority.\n\n**Maintenance Process:**\n1. Review of technical debt impact\n2. Priority assignment based on risk/benefit\n3. Scheduling during appropriate development cycles\n4. Regular updates on maintenance progress\n\nWe'll update this issue with our assessment.`;
             } else {
               // Default response for enhancement or other issues
@@ -289,8 +289,7 @@ jobs:
             }
             
             // Add welcome message for first-time contributors
-            const isFirstTime = await steps.first-time-check.outputs.result === 'true';
-            if (isFirstTime) {
+            if (isFirstTimeContributor) {
               response = `👋 Welcome, first-time contributor! We appreciate you taking the time to create an issue.\n\n` + response;
             }
             
@@ -358,16 +357,20 @@ jobs:
                 issue_number: issueNumber,
                 name: 'needs-triage'
               });
+              console.log('Removed needs-triage label');
             } catch (error) {
-              console.log('Error removing needs-triage label:', error.message);
+              console.log('Error removing needs-triage label (may already be removed):', error.message);
             }
             
             // Add needs-review label
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              labels: ['needs-review']
-            });
-            
-            console.log(`Changed status from needs-triage to needs-review for issue #${issueNumber}`);
+            try {
+              await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issueNumber,
+                labels: ['needs-review']
+              });
+              console.log('Added needs-review label');
+            } catch (error) {
+              console.log('Error adding needs-review label:', error.message);
+            }
