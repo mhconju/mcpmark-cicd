@@ -14,6 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'issues' && github.event.action == 'opened'
     steps:
+      - name: Debug - Log event
+        run: |
+          echo "Issue #${{ github.event.issue.number }} opened"
+          echo "Title: ${{ github.event.issue.title }}"
+          echo "Author: ${{ github.event.issue.user.login }}"
+
       - name: Checkout repository
         uses: actions/checkout@v4
 
@@ -29,6 +35,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
+            console.log('Creating labels if missing...');
             const labels = [
               { name: 'bug', color: 'd73a4a', description: 'Something isn\'t working' },
               { name: 'enhancement', color: 'a2eeef', description: 'New feature or request' },
@@ -69,6 +76,7 @@ jobs:
         with:
           script: |
             const issueNumber = context.issue.number;
+            console.log(`Adding needs-triage label to issue #${issueNumber}`);
             try {
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
@@ -87,6 +95,7 @@ jobs:
         with:
           script: |
             const title = process.env.ISSUE_TITLE.toLowerCase();
+            console.log(`Checking category labels for title: ${title}`);
             const labels = [];
             
             if (title.includes('bug')) {
@@ -105,6 +114,7 @@ jobs:
             }
             
             if (labels.length > 0) {
+              console.log(`Adding category labels: ${labels}`);
               await github.rest.issues.addLabels({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -125,6 +135,7 @@ jobs:
             const title = process.env.ISSUE_TITLE.toLowerCase();
             const body = (process.env.ISSUE_BODY || '').toLowerCase();
             const text = title + ' ' + body;
+            console.log(`Checking priority for text: ${text.substring(0, 100)}...`);
             
             let priority = 'priority-medium'; // default
             
@@ -139,10 +150,12 @@ jobs:
             for (const [label, keywords] of Object.entries(priorityKeywords)) {
               if (keywords.some(keyword => text.includes(keyword))) {
                 priority = label;
+                console.log(`Found priority keyword for ${label}`);
                 break; // Highest priority wins
               }
             }
             
+            console.log(`Assigning priority label: ${priority}`);
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -159,13 +172,12 @@ jobs:
     needs: issue-triage
     if: |
       github.event_name == 'issues' && 
-      github.event.action == 'opened' && 
-      contains(github.event.issue.labels.*.name, 'epic')
+      github.event.action == 'opened'
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Create sub-issues for epic
+      - name: Check if issue is epic and create sub-issues
         uses: actions/github-script@v7
         id: create-sub-issues
         with:
@@ -173,6 +185,14 @@ jobs:
             const issue = context.payload.issue;
             const parentNumber = issue.number;
             const parentTitle = issue.title;
+            
+            // Check if title contains "epic" (case-insensitive)
+            if (!parentTitle.toLowerCase().includes('epic')) {
+              console.log(`Issue #${parentNumber} is not an epic, skipping task breakdown`);
+              return [];
+            }
+            
+            console.log(`Creating sub-issues for epic #${parentNumber}: ${parentTitle}`);
             
             // Remove "Epic:" prefix if present for cleaner sub-issue titles
             const cleanTitle = parentTitle.replace(/^(Epic:|Epic\s*)/i, '').trim();
@@ -246,6 +266,9 @@ jobs:
             const issueNumber = context.issue.number;
             const author = process.env.AUTHOR;
             const currentLabels = process.env.ISSUE_LABELS.split(',').filter(l => l);
+            console.log(`Processing auto-response for issue #${issueNumber}`);
+            console.log(`Current labels: ${currentLabels}`);
+            console.log(`Author: ${author}`);
             
             // Check if first-time contributor in this repo
             let isFirstTimeContributor = false;
@@ -260,6 +283,7 @@ jobs:
               
               // If there's only 1 issue (the current one), it's their first
               isFirstTimeContributor = issues.length <= 1;
+              console.log(`First-time contributor? ${isFirstTimeContributor} (found ${issues.length} issues by this author)`);
               
               if (isFirstTimeContributor) {
                 await github.rest.issues.addLabels({
@@ -308,6 +332,7 @@ jobs:
         with:
           script: |
             const issueNumber = context.issue.number;
+            console.log(`Setting milestone for issue #${issueNumber}`);
             
             // First, check if milestone v1.0.0 exists
             try {
@@ -348,6 +373,7 @@ jobs:
         with:
           script: |
             const issueNumber = context.issue.number;
+            console.log(`Changing status for issue #${issueNumber}`);
             
             // Remove needs-triage label
             try {
